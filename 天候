@@ -1,0 +1,835 @@
+-- エグゼキューターで実行するスクリプト
+-- 3タブ版：VISUALS / BLACK LIST / ESP（個別ON/OFF対応）
+-- 追加: ESP個別トグル / 通知音（ピコン音）
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Lighting = game:GetService("Lighting")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local SoundService = game:GetService("SoundService")
+
+-- ============================================
+-- 検知されないアンチBan
+-- ============================================
+local function setupAntiBan()
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if method == "Kick" then return nil end
+        return oldNamecall(self, ...)
+    end))
+end
+
+-- ============================================
+-- ファイル保存
+-- ============================================
+local FN = "cheater_blacklist.json"
+_G.BL = {}
+pcall(function() if isfile and isfile(FN) then local d = HttpService:JSONDecode(readfile(FN)) if type(d) == "table" then _G.BL = d end end end)
+local blacklist = _G.BL
+local function saveBlacklist() pcall(function() if writefile then writefile(FN, HttpService:JSONEncode(blacklist)) end end) end
+
+-- ============================================
+-- 天候システム（雨・雪）
+-- ============================================
+local weatherParts = {}
+local weatherActive = false
+local currentWeather = "none"
+local weatherConnection = nil
+local rainSettings = { intensity = 1, dropSize = 1, dropSpeed = 1 }
+local snowSettings = { intensity = 1, flakeSize = 0.5, fallSpeed = 1 }
+
+local function clearWeather()
+    if weatherConnection then weatherConnection:Disconnect() weatherConnection = nil end
+    for _, part in pairs(weatherParts) do if part and part.Parent then part:Destroy() end end
+    weatherParts = {}
+    weatherActive = false
+    currentWeather = "none"
+end
+
+local function createRain()
+    clearWeather()
+    currentWeather = "rain"
+    weatherActive = true
+    local dropVector = Vector3.new(20, -150, 10)
+    weatherConnection = RunService.RenderStepped:Connect(function(deltaTime)
+        if not weatherActive or currentWeather ~= "rain" then return end
+        local char = LocalPlayer.Character
+        if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+        local root = char.HumanoidRootPart
+        local dropCount = math.floor(90 * rainSettings.intensity * deltaTime * 10)
+        for i = 1, math.max(1, dropCount) do
+            local drop = Instance.new("Part")
+            drop.Size = Vector3.new(0.05 * rainSettings.dropSize, 2.5 * rainSettings.dropSize, 0.05 * rainSettings.dropSize)
+            drop.Shape = Enum.PartType.Cylinder
+            local spawnPos = root.Position + Vector3.new(math.random(-40, 40), 45, math.random(-40, 40))
+            local targetPos = spawnPos + dropVector
+            drop.Position = spawnPos
+            drop.Color = Color3.fromRGB(255,255,255)
+            drop.Transparency = 0.35
+            drop.Anchored = true
+            drop.CanCollide = false
+            drop.Material = Enum.Material.Neon
+            drop.Parent = workspace
+            local fallTime = (0.5 / rainSettings.dropSpeed)
+            TweenService:Create(drop, TweenInfo.new(fallTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Position = targetPos}):Play()
+            task.delay(fallTime + 0.5, function() if drop and drop.Parent then drop:Destroy() end end)
+            table.insert(weatherParts, drop)
+        end
+    end)
+end
+
+local function createSnow()
+    clearWeather()
+    currentWeather = "snow"
+    weatherActive = true
+    local snowVector = Vector3.new(8, -120, 5)
+    weatherConnection = RunService.RenderStepped:Connect(function(deltaTime)
+        if not weatherActive or currentWeather ~= "snow" then return end
+        local char = LocalPlayer.Character
+        if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+        local root = char.HumanoidRootPart
+        local flakeCount = math.floor(40 * snowSettings.intensity * deltaTime * 10)
+        for i = 1, math.max(1, flakeCount) do
+            local flake = Instance.new("Part")
+            local size = (math.random(30, 150) / 100) * snowSettings.flakeSize
+            flake.Size = Vector3.new(size, size, size)
+            flake.Shape = Enum.PartType.Ball
+            local spawnPos = root.Position + Vector3.new(math.random(-40, 40), 30, math.random(-40, 40))
+            local targetPos = spawnPos + snowVector
+            flake.Position = spawnPos
+            flake.Color = Color3.fromRGB(255, 255, 255)
+            flake.Transparency = 0.3
+            flake.Material = Enum.Material.Neon
+            flake.Reflectance = 0.5
+            flake.Anchored = true
+            flake.CanCollide = false
+            flake.Parent = workspace
+            local fallTime = (1.0 / snowSettings.fallSpeed)
+            TweenService:Create(flake, TweenInfo.new(fallTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Position = targetPos}):Play()
+            task.delay(fallTime + 0.5, function() if flake and flake.Parent then flake:Destroy() end end)
+            table.insert(weatherParts, flake)
+        end
+    end)
+end
+
+-- スクリーンティント
+local tintConnection = nil
+local currentTint = "NONE"
+local tintColors = { PURPLE = Color3.fromRGB(150, 120, 220), GREEN = Color3.fromRGB(150, 220, 150), PINK = Color3.fromRGB(255, 150, 200), WHITE = Color3.fromRGB(255, 255, 255) }
+local function applyTint(colorName)
+    if tintConnection then tintConnection:Destroy() tintConnection = nil end
+    if colorName == "NONE" then currentTint = "NONE" return end
+    local color = tintColors[colorName]
+    if not color then currentTint = "NONE" return end
+    tintConnection = Instance.new("ColorCorrectionEffect")
+    tintConnection.Name = "ScreenTint"
+    tintConnection.TintColor = color
+    tintConnection.Saturation = 0.6
+    tintConnection.Parent = Lighting
+    currentTint = colorName
+end
+
+-- ============================================
+-- 通知システム（ピコン音付き）
+-- ============================================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "Vfx"
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 999999
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+-- 効果音を鳴らす関数
+local function playSound(soundId, volume)
+    local sound = Instance.new("Sound")
+    sound.SoundId = soundId
+    sound.Volume = volume or 0.5
+    sound.Parent = SoundService
+    sound:Play()
+    game:GetService("Debris"):AddItem(sound, 2)
+end
+
+local function notify(text)
+    -- ピコン♪という効果音（表示時）
+    pcall(function() playSound("rbxassetid://9120988119", 0.6) end)
+
+    local notifFrame = Instance.new("Frame")
+    notifFrame.Size = UDim2.new(0, 200, 0, 50)
+    notifFrame.Position = UDim2.new(1, -10, 0, 10)
+    notifFrame.AnchorPoint = Vector2.new(1, 0)
+    notifFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    notifFrame.BorderSizePixel = 0
+    notifFrame.Parent = screenGui
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = notifFrame
+    
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Size = UDim2.new(1, 0, 0, 30)
+    textLabel.Position = UDim2.new(0, 0, 0, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = text .. " 作動しました"
+    textLabel.Font = Enum.Font.GothamBold
+    textLabel.TextSize = 11
+    textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    textLabel.TextXAlignment = Enum.TextXAlignment.Center
+    textLabel.Parent = notifFrame
+    
+    local progressBar = Instance.new("Frame")
+    progressBar.Size = UDim2.new(1, 0, 0, 3)
+    progressBar.Position = UDim2.new(0, 0, 1, -3)
+    progressBar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    progressBar.BorderSizePixel = 0
+    progressBar.Parent = notifFrame
+    
+    TweenService:Create(notifFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = UDim2.new(1, -10, 0, 10)}):Play()
+    TweenService:Create(progressBar, TweenInfo.new(2, Enum.EasingStyle.Linear), {Size = UDim2.new(0, 0, 0, 3)}):Play()
+    
+    task.delay(2, function()
+        -- 消える時に音を鳴らす（少し小さめ）
+        pcall(function() playSound("rbxassetid://9120988119", 0.3) end)
+        
+        TweenService:Create(notifFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Position = UDim2.new(1, 10, 0, 10)}):Play()
+        task.wait(0.3)
+        notifFrame:Destroy()
+    end)
+end
+
+-- ============================================
+-- ESPシステム（個別トグル対応）
+-- ============================================
+local espConfig = { highlight = false, line = false, name = false, distance = false }
+local espColor = Color3.fromRGB(255, 255, 255)
+local espObjects = {}
+
+local function clearEsp()
+    for _, obj in pairs(espObjects) do if obj and obj.Parent then obj:Destroy() end end
+    espObjects = {}
+end
+
+local espLoopConnection = nil
+
+local function updateEsp()
+    clearEsp()
+    
+    -- もし全部OFFならループも止める
+    if not (espConfig.highlight or espConfig.line or espConfig.name or espConfig.distance) then
+        if espLoopConnection then espLoopConnection:Disconnect() espLoopConnection = nil end
+        return
+    end
+    
+    local char = LocalPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    
+    -- 常時更新用のループ（名前の距離を更新するため）
+    if not espLoopConnection then
+        espLoopConnection = RunService.RenderStepped:Connect(function()
+            if not (espConfig.highlight or espConfig.line or espConfig.name or espConfig.distance) then return end
+            local charNow = LocalPlayer.Character
+            if not charNow or not charNow:FindFirstChild("HumanoidRootPart") then return end
+            local root = charNow.HumanoidRootPart
+            
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                    local targetRoot = player.Character.HumanoidRootPart
+                    -- ビームと距離の更新
+                    if espConfig.line then
+                        for _, obj in pairs(espObjects) do
+                            if obj.Name == "ESP_Beam_" .. player.Name then
+                                obj.Attachment0.WorldPosition = root.Position + Vector3.new(0, 2, 0)
+                                obj.Attachment1.WorldPosition = targetRoot.Position + Vector3.new(0, 2, 0)
+                            end
+                        end
+                    end
+                    if espConfig.distance then
+                        local distance = (root.Position - targetRoot.Position).Magnitude
+                        for _, obj in pairs(espObjects) do
+                            if obj.Name == "ESP_Dist_" .. player.Name then
+                                obj.Text = "距離: " .. string.format("%.0f", distance)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local targetRoot = player.Character.HumanoidRootPart
+            local head = player.Character:FindFirstChild("Head") or targetRoot
+            
+            -- 1. キャラ全体（ハイライト）
+            if espConfig.highlight then
+                local highlight = Instance.new("Highlight")
+                highlight.FillColor = espColor
+                highlight.FillTransparency = 0.7
+                highlight.OutlineColor = espColor
+                highlight.OutlineTransparency = 0
+                highlight.Parent = player.Character
+                table.insert(espObjects, highlight)
+            end
+            
+            -- 2. 線（ビーム）
+            if espConfig.line then
+                local attachment1 = Instance.new("Attachment")
+                attachment1.Position = Vector3.new(0, 2, 0)
+                attachment1.Parent = char.Head or char.HumanoidRootPart
+                local attachment2 = Instance.new("Attachment")
+                attachment2.Position = Vector3.new(0, 2, 0)
+                attachment2.Parent = head
+                local beam = Instance.new("Beam")
+                beam.Name = "ESP_Beam_" .. player.Name
+                beam.Attachment0 = attachment1
+                beam.Attachment1 = attachment2
+                beam.Color = ColorSequence.new(espColor)
+                beam.LightEmission = 0.5
+                beam.Width0 = 0.1
+                beam.Width1 = 0.1
+                beam.Parent = workspace
+                table.insert(espObjects, beam)
+                table.insert(espObjects, attachment1)
+                table.insert(espObjects, attachment2)
+            end
+            
+            -- 3・4. 名前と距離
+            if espConfig.name or espConfig.distance then
+                local billboard = Instance.new("BillboardGui")
+                billboard.Size = UDim2.new(0, 150, 0, 40)
+                billboard.AlwaysOnTop = true
+                billboard.StudsOffsetWorldSpace = Vector3.new(0, 2.5, 0)
+                billboard.Parent = head
+                table.insert(espObjects, billboard)
+                
+                if espConfig.name then
+                    local nameLabel = Instance.new("TextLabel")
+                    nameLabel.Size = UDim2.new(1, 0, 0, 20)
+                    nameLabel.BackgroundTransparency = 1
+                    nameLabel.Text = player.Name
+                    nameLabel.Font = Enum.Font.GothamBold
+                    nameLabel.TextSize = 12
+                    nameLabel.TextColor3 = espColor
+                    nameLabel.TextStrokeTransparency = 0.5
+                    nameLabel.Parent = billboard
+                    table.insert(espObjects, nameLabel)
+                end
+                
+                if espConfig.distance then
+                    local distLabel = Instance.new("TextLabel")
+                    distLabel.Name = "ESP_Dist_" .. player.Name
+                    distLabel.Size = UDim2.new(1, 0, 0, 20)
+                    distLabel.Position = UDim2.new(0, 0, 0, 20)
+                    distLabel.BackgroundTransparency = 1
+                    distLabel.Text = "距離: 計算中..."
+                    distLabel.Font = Enum.Font.Gotham
+                    distLabel.TextSize = 10
+                    distLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    distLabel.Parent = billboard
+                    table.insert(espObjects, distLabel)
+                end
+            end
+        end
+    end
+end
+
+-- ============================================
+-- GUI構築（3タブ）
+-- ============================================
+local kButton = Instance.new("TextButton")
+kButton.Size = UDim2.new(0,50,0,50)
+kButton.Position = UDim2.new(0,15,0,15)
+kButton.Text = "K"
+kButton.Font = Enum.Font.FredokaOne
+kButton.TextSize = 24
+kButton.TextColor3 = Color3.fromRGB(255,255,255)
+kButton.BackgroundColor3 = Color3.fromRGB(25,25,30)
+kButton.BackgroundTransparency = 0.1
+kButton.BorderSizePixel = 0
+kButton.Parent = screenGui
+local kCorner = Instance.new("UICorner")
+kCorner.CornerRadius = UDim.new(0,25)
+kCorner.Parent = kButton
+
+local dragging, dragStart, startPos
+kButton.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true; dragStart = input.Position; startPos = kButton.Position
+        input.Changed:Connect(function() if input.UserInputState == Enum.UserInputState.End then dragging = false end end)
+    end
+end)
+kButton.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        if dragging then
+            local delta = input.Position - dragStart
+            kButton.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end
+end)
+
+local panel = Instance.new("Frame")
+panel.Size = UDim2.new(0,320,0,480)
+panel.Position = UDim2.new(0.5,-160,0.5,-280)
+panel.BackgroundColor3 = Color3.fromRGB(20,20,25)
+panel.Visible = false
+panel.Parent = screenGui
+local panelCorner = Instance.new("UICorner")
+panelCorner.CornerRadius = UDim.new(0,16)
+panelCorner.Parent = panel
+
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1,0,0,45)
+titleBar.BackgroundColor3 = Color3.fromRGB(30,30,38)
+titleBar.Parent = panel
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1,0,1,0)
+title.Text = "kooa hab"
+title.Font = Enum.Font.FredokaOne
+title.TextSize = 18
+title.TextColor3 = Color3.fromRGB(255,255,255)
+title.BackgroundTransparency = 1
+title.Parent = titleBar
+
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0,28,0,28)
+closeButton.Position = UDim2.new(1,-32,0,8)
+closeButton.Text = "×"
+closeButton.Font = Enum.Font.GothamBold
+closeButton.TextSize = 16
+closeButton.TextColor3 = Color3.fromRGB(255,255,255)
+closeButton.BackgroundColor3 = Color3.fromRGB(70,35,35)
+closeButton.Parent = panel
+
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1,0,0,40)
+tabBar.Position = UDim2.new(0,0,0,45)
+tabBar.BackgroundColor3 = Color3.fromRGB(25,25,30)
+tabBar.Parent = panel
+
+local visualTabButton = Instance.new("TextButton")
+visualTabButton.Size = UDim2.new(0.333,0,1,0)
+visualTabButton.Text = "VISUALS"
+visualTabButton.Font = Enum.Font.GothamBold
+visualTabButton.TextSize = 12
+visualTabButton.TextColor3 = Color3.fromRGB(255,255,255)
+visualTabButton.BackgroundColor3 = Color3.fromRGB(45,45,55)
+visualTabButton.Parent = tabBar
+
+local blacklistTabButton = Instance.new("TextButton")
+blacklistTabButton.Size = UDim2.new(0.333,0,1,0)
+blacklistTabButton.Position = UDim2.new(0.333,0,0,0)
+blacklistTabButton.Text = "BLACK LIST"
+blacklistTabButton.Font = Enum.Font.GothamBold
+blacklistTabButton.TextSize = 12
+blacklistTabButton.TextColor3 = Color3.fromRGB(150,150,170)
+blacklistTabButton.BackgroundColor3 = Color3.fromRGB(25,25,30)
+blacklistTabButton.Parent = tabBar
+
+local espTabButton = Instance.new("TextButton")
+espTabButton.Size = UDim2.new(0.334,0,1,0)
+espTabButton.Position = UDim2.new(0.666,0,0,0)
+espTabButton.Text = "ESP"
+espTabButton.Font = Enum.Font.GothamBold
+espTabButton.TextSize = 12
+espTabButton.TextColor3 = Color3.fromRGB(150,150,170)
+espTabButton.BackgroundColor3 = Color3.fromRGB(25,25,30)
+espTabButton.Parent = tabBar
+
+local visualScrollFrame = Instance.new("ScrollingFrame")
+visualScrollFrame.Size = UDim2.new(1,0,1,-85)
+visualScrollFrame.Position = UDim2.new(0,0,0,85)
+visualScrollFrame.BackgroundTransparency = 1
+visualScrollFrame.CanvasSize = UDim2.new(0,0,0,900)
+visualScrollFrame.Parent = panel
+
+local blacklistScrollFrame = Instance.new("ScrollingFrame")
+blacklistScrollFrame.Size = UDim2.new(1,0,1,-85)
+blacklistScrollFrame.Position = UDim2.new(0,0,0,85)
+blacklistScrollFrame.BackgroundTransparency = 1
+blacklistScrollFrame.CanvasSize = UDim2.new(0,0,0,600)
+blacklistScrollFrame.Visible = false
+blacklistScrollFrame.Parent = panel
+
+local espScrollFrame = Instance.new("ScrollingFrame")
+espScrollFrame.Size = UDim2.new(1,0,1,-85)
+espScrollFrame.Position = UDim2.new(0,0,0,85)
+espScrollFrame.BackgroundTransparency = 1
+espScrollFrame.CanvasSize = UDim2.new(0,0,0,400)
+espScrollFrame.Visible = false
+espScrollFrame.Parent = panel
+
+local function createSection(text, yPos, parent)
+    local sectionFrame = Instance.new("Frame")
+    sectionFrame.Size = UDim2.new(0.92,0,0,25)
+    sectionFrame.Position = UDim2.new(0.04,0,0,yPos)
+    sectionFrame.BackgroundColor3 = Color3.fromRGB(30,30,35)
+    sectionFrame.Parent = parent
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1,0,1,0)
+    label.Text = text
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 11
+    label.TextColor3 = Color3.fromRGB(200,200,220)
+    label.BackgroundTransparency = 1
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Position = UDim2.new(0,10,0,0)
+    label.Parent = sectionFrame
+end
+
+local function createButton(text, xPos, yPos, xSize, parent)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(xSize,0,0,32)
+    button.Position = UDim2.new(xPos,0,0,yPos)
+    button.Text = text
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 10
+    button.TextColor3 = Color3.fromRGB(150,150,170)
+    button.BackgroundColor3 = Color3.fromRGB(35,35,40)
+    button.Parent = parent
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0,8)
+    corner.Parent = button
+    button.MouseEnter:Connect(function() TweenService:Create(button, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(55,55,65), TextColor3 = Color3.fromRGB(255,255,255)}):Play() end)
+    button.MouseLeave:Connect(function() TweenService:Create(button, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(35,35,40), TextColor3 = Color3.fromRGB(150,150,170)}):Play() end)
+    return button
+end
+
+local function createSlider(label, yPos, minValue, maxValue, defaultValue, parent)
+    local labelObj = Instance.new("TextLabel")
+    labelObj.Size = UDim2.new(0.9,0,0,20)
+    labelObj.Position = UDim2.new(0.05,0,0,yPos)
+    labelObj.Text = label .. ": " .. string.format("%.1f", defaultValue)
+    labelObj.Font = Enum.Font.Gotham
+    labelObj.TextSize = 10
+    labelObj.TextColor3 = Color3.fromRGB(180,180,200)
+    labelObj.BackgroundTransparency = 1
+    labelObj.TextXAlignment = Enum.TextXAlignment.Left
+    labelObj.Parent = parent
+    local sliderBtn = Instance.new("TextButton")
+    sliderBtn.Size = UDim2.new(0.9,0,0,8)
+    sliderBtn.Position = UDim2.new(0.05,0,0,yPos+20)
+    sliderBtn.Text = ""
+    sliderBtn.BackgroundColor3 = Color3.fromRGB(50,50,60)
+    sliderBtn.Parent = parent
+    local sliderCorner = Instance.new("UICorner")
+    sliderCorner.CornerRadius = UDim.new(0,4)
+    sliderCorner.Parent = sliderBtn
+    sliderBtn.MouseEnter:Connect(function() TweenService:Create(sliderBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(70,70,80)}):Play() end)
+    sliderBtn.MouseLeave:Connect(function() TweenService:Create(sliderBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(50,50,60)}):Play() end)
+    return labelObj, sliderBtn
+end
+
+-- ============================================
+-- VISUALSタブ
+-- ============================================
+createSection("WEATHER", 10, visualScrollFrame)
+local rainButton = createButton("RAIN", 0.04, 45, 0.3, visualScrollFrame)
+local snowButton = createButton("SNOW", 0.36, 45, 0.3, visualScrollFrame)
+local noneWeatherButton = createButton("NONE", 0.68, 45, 0.28, visualScrollFrame)
+
+local rainIntensityLabel, rainIntensitySlider = createSlider("RAIN AMOUNT", 90, 0, 3, 1, visualScrollFrame)
+local rainSizeLabel, rainSizeSlider = createSlider("RAIN SIZE", 125, 0.5, 2, 1, visualScrollFrame)
+local rainSpeedLabel, rainSpeedSlider = createSlider("RAIN SPEED", 160, 0.5, 2, 1, visualScrollFrame)
+
+local snowIntensityLabel, snowIntensitySlider = createSlider("SNOW AMOUNT", 195, 0, 3, 1, visualScrollFrame)
+local snowSizeLabel, snowSizeSlider = createSlider("SNOW SIZE", 230, 0.3, 1.5, 0.5, visualScrollFrame)
+local snowSpeedLabel, snowSpeedSlider = createSlider("SNOW SPEED", 265, 0.5, 2, 1, visualScrollFrame)
+
+createSection("EFFECTS", 300, visualScrollFrame)
+local brightnessLabel, brightnessSlider = createSlider("BRIGHTNESS", 335, 0, 5, 3, visualScrollFrame)
+local exposureLabel, exposureSlider = createSlider("EXPOSURE", 370, -5, 5, 0, visualScrollFrame)
+local saturationLabel, saturationSlider = createSlider("SATURATION", 405, -1, 1, 0, visualScrollFrame)
+local contrastLabel, contrastSlider = createSlider("CONTRAST", 440, -1, 1, 0, visualScrollFrame)
+local fogLabel, fogSlider = createSlider("FOG DENSITY", 475, 0, 1, 0, visualScrollFrame)
+local sunLabel, sunSlider = createSlider("SUN INTENSITY", 510, 0, 3, 1, visualScrollFrame)
+local ambientLabel, ambientSlider = createSlider("AMBIENT WARMTH", 545, 0, 1, 0.5, visualScrollFrame)
+local shadowButton = createButton("SHADOWS: ON", 0.04, 580, 0.92, visualScrollFrame)
+
+createSection("SCREEN TINT", 615, visualScrollFrame)
+local noneTintButton = createButton("NONE", 0.04, 650, 0.22, visualScrollFrame)
+local purpleTintButton = createButton("PURPLE", 0.27, 650, 0.22, visualScrollFrame)
+local greenTintButton = createButton("GREEN", 0.50, 650, 0.22, visualScrollFrame)
+local pinkTintButton = createButton("PINK", 0.73, 650, 0.22, visualScrollFrame)
+local whiteTintButton = createButton("WHITE", 0.04, 685, 0.22, visualScrollFrame)
+
+local resetButton = Instance.new("TextButton")
+resetButton.Size = UDim2.new(0.92,0,0,40)
+resetButton.Position = UDim2.new(0.04,0,0,730)
+resetButton.Text = "RESET ALL"
+resetButton.Font = Enum.Font.GothamBold
+resetButton.TextSize = 12
+resetButton.TextColor3 = Color3.fromRGB(255,255,255)
+resetButton.BackgroundColor3 = Color3.fromRGB(90,40,40)
+resetButton.Parent = visualScrollFrame
+local resetCorner = Instance.new("UICorner")
+resetCorner.CornerRadius = UDim.new(0,8)
+resetCorner.Parent = resetButton
+
+-- ============================================
+-- BLACK LISTタブ
+-- ============================================
+createSection("PLAYERS", 10, blacklistScrollFrame)
+local playerListContainer = Instance.new("Frame")
+playerListContainer.Size = UDim2.new(0.92,0,0,350)
+playerListContainer.Position = UDim2.new(0.04,0,0,45)
+playerListContainer.BackgroundColor3 = Color3.fromRGB(30,30,35)
+playerListContainer.Parent = blacklistScrollFrame
+
+local playerEntries = {}
+local function createPlayerEntry(player, yPos)
+    local entryFrame = Instance.new("Frame")
+    entryFrame.Size = UDim2.new(1,0,0,50)
+    entryFrame.Position = UDim2.new(0,0,0,yPos)
+    entryFrame.BackgroundColor3 = Color3.fromRGB(35,35,40)
+    entryFrame.Parent = playerListContainer
+    
+    local iconImage = Instance.new("ImageLabel")
+    iconImage.Size = UDim2.new(0,40,0,40)
+    iconImage.Position = UDim2.new(0,5,0,5)
+    iconImage.BackgroundColor3 = Color3.fromRGB(50,50,55)
+    iconImage.Parent = entryFrame
+    spawn(function() pcall(function() iconImage.Image = Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420) end) end)
+    
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(0.5,0,0,25)
+    nameLabel.Position = UDim2.new(0,50,0,0)
+    nameLabel.Text = player.Name
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextSize = 11
+    nameLabel.TextColor3 = Color3.fromRGB(200,200,220)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+    nameLabel.Parent = entryFrame
+    
+    local idLabel = Instance.new("TextLabel")
+    idLabel.Size = UDim2.new(0.5,0,0,20)
+    idLabel.Position = UDim2.new(0,50,0,25)
+    idLabel.Text = "ID: " .. player.UserId
+    idLabel.Font = Enum.Font.Gotham
+    idLabel.TextSize = 9
+    idLabel.TextColor3 = Color3.fromRGB(150,150,170)
+    idLabel.BackgroundTransparency = 1
+    idLabel.TextXAlignment = Enum.TextXAlignment.Left
+    idLabel.Parent = entryFrame
+    
+    local safeButton = createButton("SAFE", 1,-130,60, entryFrame) safeButton.Position = UDim2.new(1,-130,0,12) safeButton.Size = UDim2.new(0,60,0,25)
+    local outButton = createButton("OUT", 1,-65,60, entryFrame) outButton.Position = UDim2.new(1,-65,0,12) outButton.Size = UDim2.new(0,60,0,25)
+    
+    local savedStatus = blacklist[tostring(player.UserId)]
+    if savedStatus == "safe" then nameLabel.TextColor3 = Color3.fromRGB(100,255,100) safeButton.BackgroundColor3 = Color3.fromRGB(40,80,40)
+    elseif savedStatus == "out" then nameLabel.TextColor3 = Color3.fromRGB(255,100,100) outButton.BackgroundColor3 = Color3.fromRGB(80,40,40) end
+
+    safeButton.MouseButton1Click:Connect(function()
+        notify("SAFE 設定"); blacklist[tostring(player.UserId)] = "safe" saveBlacklist()
+        nameLabel.TextColor3 = Color3.fromRGB(100,255,100); safeButton.BackgroundColor3 = Color3.fromRGB(40,80,40); outButton.BackgroundColor3 = Color3.fromRGB(35,35,40)
+    end)
+    outButton.MouseButton1Click:Connect(function()
+        notify("OUT 設定"); blacklist[tostring(player.UserId)] = "out" saveBlacklist()
+        nameLabel.TextColor3 = Color3.fromRGB(255,100,100); outButton.BackgroundColor3 = Color3.fromRGB(80,40,40); safeButton.BackgroundColor3 = Color3.fromRGB(35,35,40)
+    end)
+end
+
+local function updatePlayerList()
+    for _, entry in pairs(playerEntries) do if entry and entry.Parent then entry:Destroy() end end
+    playerEntries = {}
+    local yPos = 0
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local entry = createPlayerEntry(player, yPos)
+            table.insert(playerEntries, entry)
+            yPos += 55
+        end
+    end
+    blacklistScrollFrame.CanvasSize = UDim2.new(0,0,0, math.max(400, yPos+10))
+end
+
+Players.PlayerAdded:Connect(function() wait(0.5) updatePlayerList() end)
+Players.PlayerRemoving:Connect(function() wait(0.5) updatePlayerList() end)
+
+-- ============================================
+-- ESPタブ（個別トグル）
+-- ============================================
+createSection("ESP TOGGLES", 10, espScrollFrame)
+
+local highlightBtn = createButton("キャラ全体 [OFF]", 0.04, 45, 0.44, espScrollFrame)
+local lineBtn = createButton("線 [OFF]", 0.50, 45, 0.46, espScrollFrame)
+local nameBtn = createButton("名前 [OFF]", 0.04, 80, 0.44, espScrollFrame)
+local distanceBtn = createButton("距離 [OFF]", 0.50, 80, 0.46, espScrollFrame)
+
+createSection("COLOR", 115, espScrollFrame)
+local redButton = createButton("RED", 0.04, 150, 0.29, espScrollFrame)
+local blueButton = createButton("BLUE", 0.355, 150, 0.29, espScrollFrame)
+local yellowButton = createButton("YELLOW", 0.67, 150, 0.29, espScrollFrame)
+local greenButton = createButton("GREEN", 0.04, 185, 0.29, espScrollFrame)
+local whiteButton = createButton("WHITE", 0.355, 185, 0.29, espScrollFrame)
+local purpleButton = createButton("PURPLE", 0.67, 185, 0.29, espScrollFrame)
+
+local espColorMap = {
+    RED = Color3.fromRGB(255, 50, 50), BLUE = Color3.fromRGB(50, 120, 255), YELLOW = Color3.fromRGB(255, 255, 50),
+    GREEN = Color3.fromRGB(50, 255, 50), WHITE = Color3.fromRGB(255, 255, 255), PURPLE = Color3.fromRGB(200, 50, 255)
+}
+
+-- ボタンの表示を更新する関数
+local function updateEspButtonVisuals()
+    highlightBtn.Text = "キャラ全体 " .. (espConfig.highlight and "[ON]" or "[OFF]")
+    lineBtn.Text = "線 " .. (espConfig.line and "[ON]" or "[OFF]")
+    nameBtn.Text = "名前 " .. (espConfig.name and "[ON]" or "[OFF]")
+    distanceBtn.Text = "距離 " .. (espConfig.distance and "[ON]" or "[OFF]")
+    
+    highlightBtn.BackgroundColor3 = espConfig.highlight and Color3.fromRGB(55,55,65) or Color3.fromRGB(35,35,40)
+    lineBtn.BackgroundColor3 = espConfig.line and Color3.fromRGB(55,55,65) or Color3.fromRGB(35,35,40)
+    nameBtn.BackgroundColor3 = espConfig.name and Color3.fromRGB(55,55,65) or Color3.fromRGB(35,35,40)
+    distanceBtn.BackgroundColor3 = espConfig.distance and Color3.fromRGB(55,55,65) or Color3.fromRGB(35,35,40)
+end
+
+highlightBtn.MouseButton1Click:Connect(function()
+    notify("ハイライト"); espConfig.highlight = not espConfig.highlight; updateEspButtonVisuals(); updateEsp()
+end)
+lineBtn.MouseButton1Click:Connect(function()
+    notify("線"); espConfig.line = not espConfig.line; updateEspButtonVisuals(); updateEsp()
+end)
+nameBtn.MouseButton1Click:Connect(function()
+    notify("名前"); espConfig.name = not espConfig.name; updateEspButtonVisuals(); updateEsp()
+end)
+distanceBtn.MouseButton1Click:Connect(function()
+    notify("距離"); espConfig.distance = not espConfig.distance; updateEspButtonVisuals(); updateEsp()
+end)
+
+for _, data in ipairs({
+    {btn=redButton, col=espColorMap.RED}, {btn=blueButton, col=espColorMap.BLUE}, {btn=yellowButton, col=espColorMap.YELLOW},
+    {btn=greenButton, col=espColorMap.GREEN}, {btn=whiteButton, col=espColorMap.WHITE}, {btn=purpleButton, col=espColorMap.PURPLE}
+}) do
+    data.btn.MouseButton1Click:Connect(function()
+        espColor = data.col
+        notify("カラー変更")
+        updateEsp()
+    end)
+end
+
+-- ============================================
+-- タブ切り替え & UI開閉
+-- ============================================
+local function openPanel()
+    panel.Visible = true; kButton.Visible = false
+    panel.Position = UDim2.new(0.5,-160,0.5,-280)
+    TweenService:Create(panel, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = UDim2.new(0.5,-160,0.5,-240)}):Play()
+end
+
+local function closePanel()
+    TweenService:Create(panel, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Position = UDim2.new(0.5,-160,0.5,-280)}):Play()
+    task.wait(0.2)
+    panel.Visible = false; kButton.Visible = true
+end
+
+kButton.MouseButton1Click:Connect(openPanel)
+closeButton.MouseButton1Click:Connect(closePanel)
+
+visualTabButton.MouseButton1Click:Connect(function()
+    visualScrollFrame.Visible = true; blacklistScrollFrame.Visible = false; espScrollFrame.Visible = false
+    visualTabButton.BackgroundColor3 = Color3.fromRGB(45,45,55); visualTabButton.TextColor3 = Color3.fromRGB(255,255,255)
+    blacklistTabButton.BackgroundColor3 = Color3.fromRGB(25,25,30); blacklistTabButton.TextColor3 = Color3.fromRGB(150,150,170)
+    espTabButton.BackgroundColor3 = Color3.fromRGB(25,25,30); espTabButton.TextColor3 = Color3.fromRGB(150,150,170)
+end)
+
+blacklistTabButton.MouseButton1Click:Connect(function()
+    visualScrollFrame.Visible = false; blacklistScrollFrame.Visible = true; espScrollFrame.Visible = false
+    visualTabButton.BackgroundColor3 = Color3.fromRGB(25,25,30); visualTabButton.TextColor3 = Color3.fromRGB(150,150,170)
+    blacklistTabButton.BackgroundColor3 = Color3.fromRGB(45,45,55); blacklistTabButton.TextColor3 = Color3.fromRGB(255,255,255)
+    espTabButton.BackgroundColor3 = Color3.fromRGB(25,25,30); espTabButton.TextColor3 = Color3.fromRGB(150,150,170)
+    updatePlayerList()
+end)
+
+espTabButton.MouseButton1Click:Connect(function()
+    visualScrollFrame.Visible = false; blacklistScrollFrame.Visible = false; espScrollFrame.Visible = true
+    visualTabButton.BackgroundColor3 = Color3.fromRGB(25,25,30); visualTabButton.TextColor3 = Color3.fromRGB(150,150,170)
+    blacklistTabButton.BackgroundColor3 = Color3.fromRGB(25,25,30); blacklistTabButton.TextColor3 = Color3.fromRGB(150,150,170)
+    espTabButton.BackgroundColor3 = Color3.fromRGB(45,45,55); espTabButton.TextColor3 = Color3.fromRGB(255,255,255)
+end)
+
+-- ============================================
+-- 機能の実装（VISUALS）
+-- ============================================
+local currentWeatherType = "none"
+
+local function updateWeatherButtons()
+    local buttons = {rainButton, snowButton, noneWeatherButton}
+    local types = {"rain", "snow", "none"}
+    for i, button in ipairs(buttons) do
+        if currentWeatherType == types[i] then button.BackgroundColor3 = Color3.fromRGB(55,55,65); button.TextColor3 = Color3.fromRGB(255,255,255)
+        else button.BackgroundColor3 = Color3.fromRGB(35,35,40); button.TextColor3 = Color3.fromRGB(150,150,170) end
+    end
+end
+
+rainButton.MouseButton1Click:Connect(function() notify("RAIN"); currentWeatherType = "rain" updateWeatherButtons() createRain() end)
+snowButton.MouseButton1Click:Connect(function() notify("SNOW"); currentWeatherType = "snow" updateWeatherButtons() createSnow() end)
+noneWeatherButton.MouseButton1Click:Connect(function() notify("WEATHER NONE"); currentWeatherType = "none" updateWeatherButtons() clearWeather() end)
+
+rainIntensitySlider.MouseButton1Down:Connect(function(x,y) local percent = (x - rainIntensitySlider.AbsolutePosition.X) / rainIntensitySlider.AbsoluteSize.X; rainSettings.intensity = math.clamp(percent*3,0,3); rainIntensityLabel.Text = "RAIN AMOUNT: "..string.format("%.1f",rainSettings.intensity); if currentWeatherType == "rain" then createRain() end end)
+rainSizeSlider.MouseButton1Down:Connect(function(x,y) local percent = (x - rainSizeSlider.AbsolutePosition.X) / rainSizeSlider.AbsoluteSize.X; rainSettings.dropSize = math.clamp(0.5+percent*1.5,0.5,2); rainSizeLabel.Text = "RAIN SIZE: "..string.format("%.1f",rainSettings.dropSize); if currentWeatherType == "rain" then createRain() end end)
+rainSpeedSlider.MouseButton1Down:Connect(function(x,y) local percent = (x - rainSpeedSlider.AbsolutePosition.X) / rainSpeedSlider.AbsoluteSize.X; rainSettings.dropSpeed = math.clamp(0.5+percent*1.5,0.5,2); rainSpeedLabel.Text = "RAIN SPEED: "..string.format("%.1f",rainSettings.dropSpeed); if currentWeatherType == "rain" then createRain() end end)
+snowIntensitySlider.MouseButton1Down:Connect(function(x,y) local percent = (x - snowIntensitySlider.AbsolutePosition.X) / snowIntensitySlider.AbsoluteSize.X; snowSettings.intensity = math.clamp(percent*3,0,3); snowIntensityLabel.Text = "SNOW AMOUNT: "..string.format("%.1f",snowSettings.intensity); if currentWeatherType == "snow" then createSnow() end end)
+snowSizeSlider.MouseButton1Down:Connect(function(x,y) local percent = (x - snowSizeSlider.AbsolutePosition.X) / snowSizeSlider.AbsoluteSize.X; snowSettings.flakeSize = math.clamp(0.3+percent*1.2,0.3,1.5); snowSizeLabel.Text = "SNOW SIZE: "..string.format("%.1f",snowSettings.flakeSize); if currentWeatherType == "snow" then createSnow() end end)
+snowSpeedSlider.MouseButton1Down:Connect(function(x,y) local percent = (x - snowSpeedSlider.AbsolutePosition.X) / snowSpeedSlider.AbsoluteSize.X; snowSettings.fallSpeed = math.clamp(0.5+percent*1.5,0.5,2); snowSpeedLabel.Text = "SNOW SPEED: "..string.format("%.1f",snowSettings.fallSpeed); if currentWeatherType == "snow" then createSnow() end end)
+
+brightnessSlider.MouseButton1Down:Connect(function(x,y) local value = math.clamp((x - brightnessSlider.AbsolutePosition.X) / brightnessSlider.AbsoluteSize.X * 5, 0, 5); brightnessLabel.Text = "BRIGHTNESS: "..string.format("%.1f",value); Lighting.Brightness = value end)
+exposureSlider.MouseButton1Down:Connect(function(x,y) local value = math.clamp((x - exposureSlider.AbsolutePosition.X) / exposureSlider.AbsoluteSize.X * 10 - 5, -5, 5); exposureLabel.Text = "EXPOSURE: "..string.format("%.1f",value); Lighting.ExposureCompensation = value end)
+saturationSlider.MouseButton1Down:Connect(function(x,y) local value = math.clamp((x - saturationSlider.AbsolutePosition.X) / saturationSlider.AbsoluteSize.X * 2 - 1, -1, 1); saturationLabel.Text = "SATURATION: "..string.format("%.1f",value); Lighting.ColorCorrectionSaturation = value end)
+contrastSlider.MouseButton1Down:Connect(function(x,y) local value = math.clamp((x - contrastSlider.AbsolutePosition.X) / contrastSlider.AbsoluteSize.X * 2 - 1, -1, 1); contrastLabel.Text = "CONTRAST: "..string.format("%.1f",value); Lighting.ColorCorrectionContrast = value end)
+fogSlider.MouseButton1Down:Connect(function(x,y) local value = math.clamp((x - fogSlider.AbsolutePosition.X) / fogSlider.AbsoluteSize.X, 0, 1); fogLabel.Text = "FOG DENSITY: "..string.format("%.1f",value); Lighting.FogStart = 100 - value*80; Lighting.FogEnd = 300 - value*200 end)
+sunSlider.MouseButton1Down:Connect(function(x,y) local value = math.clamp((x - sunSlider.AbsolutePosition.X) / sunSlider.AbsoluteSize.X * 3, 0, 3); sunLabel.Text = "SUN INTENSITY: "..string.format("%.1f",value); if Lighting:FindFirstChild("SunLight") then Lighting.SunLight.Brightness = value; Lighting.SunLight.Enabled = value > 0 end end)
+ambientSlider.MouseButton1Down:Connect(function(x,y) local value = math.clamp((x - ambientSlider.AbsolutePosition.X) / ambientSlider.AbsoluteSize.X, 0, 1); ambientLabel.Text = "AMBIENT WARMTH: "..string.format("%.1f",value); Lighting.OutdoorAmbient = Color3.fromRGB(127+(value-0.5)*100,127,127-(value-0.5)*100) end)
+
+local shadowEnabled = true
+shadowButton.MouseButton1Click:Connect(function()
+    notify("SHADOWS " .. (shadowEnabled and "OFF" or "ON"))
+    shadowEnabled = not shadowEnabled
+    shadowButton.Text = "SHADOWS: "..(shadowEnabled and "ON" or "OFF")
+    Lighting.GlobalShadows = shadowEnabled
+end)
+
+local tintButtonMap = {
+    {button = noneTintButton, value = "NONE"}, {button = purpleTintButton, value = "PURPLE"},
+    {button = greenTintButton, value = "GREEN"}, {button = pinkTintButton, value = "PINK"},
+    {button = whiteTintButton, value = "WHITE"}
+}
+local function updateTintButtons()
+    for _, data in ipairs(tintButtonMap) do
+        if currentTint == data.value then data.button.BackgroundColor3 = Color3.fromRGB(55,55,65); data.button.TextColor3 = Color3.fromRGB(255,255,255)
+        else data.button.BackgroundColor3 = Color3.fromRGB(35,35,40); data.button.TextColor3 = Color3.fromRGB(150,150,170) end
+    end
+end
+for _, data in ipairs(tintButtonMap) do
+    data.button.MouseButton1Click:Connect(function()
+        notify("TINT " .. data.value); applyTint(data.value); updateTintButtons()
+    end)
+end
+
+resetButton.MouseButton1Click:Connect(function()
+    notify("RESET ALL")
+    currentWeatherType = "none"; currentTint = "NONE"; rainSettings = {intensity=1, dropSize=1, dropSpeed=1}; snowSettings = {intensity=1, flakeSize=0.5, fallSpeed=1}
+    updateWeatherButtons(); updateTintButtons(); clearWeather(); applyTint("NONE")
+    Lighting.Brightness = 3; Lighting.ExposureCompensation = 0; Lighting.ColorCorrectionSaturation = 0; Lighting.ColorCorrectionContrast = 0
+    Lighting.GlobalShadows = true; Lighting.OutdoorAmbient = Color3.fromRGB(127,127,127); Lighting.FogStart = 100; Lighting.FogEnd = 300
+    if Lighting:FindFirstChild("SunLight") then Lighting.SunLight.Brightness = 1; Lighting.SunLight.Enabled = true end
+    rainIntensityLabel.Text = "RAIN AMOUNT: 1.0"; rainSizeLabel.Text = "RAIN SIZE: 1.0"; rainSpeedLabel.Text = "RAIN SPEED: 1.0"
+    snowIntensityLabel.Text = "SNOW AMOUNT: 1.0"; snowSizeLabel.Text = "SNOW SIZE: 0.5"; snowSpeedLabel.Text = "SNOW SPEED: 1.0"
+    brightnessLabel.Text = "BRIGHTNESS: 3.0"; exposureLabel.Text = "EXPOSURE: 0.0"; saturationLabel.Text = "SATURATION: 0.0"
+    contrastLabel.Text = "CONTRAST: 0.0"; fogLabel.Text = "FOG DENSITY: 0.0"; sunLabel.Text = "SUN INTENSITY: 1.0"
+    ambientLabel.Text = "AMBIENT WARMTH: 0.5"; shadowButton.Text = "SHADOWS: ON"
+end)
+
+-- ============================================
+-- 初期化
+-- ============================================
+setupAntiBan()
+updateWeatherButtons()
+updateTintButtons()
+updatePlayerList()
+updateEspButtonVisuals()
+updateEsp()
+
+print("修正完了！ESPを個別にON/OFFできるようになりました。")
+print("通知時にピコン♪と音が鳴るようになりました。")
